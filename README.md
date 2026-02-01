@@ -33,33 +33,52 @@
 
 ## Rust 🦀
 
-```
+```shell
 cargo add rust-sasa
 ```
 
 ## Python 🐍
-```
+```shell
+# PyPI
 pip install rust-sasa-python
+
+# conda
+conda install -c conda-forge rust-sasa-python
+
+# mamba
+mamba install -c conda-forge rust-sasa-python
 ```
 
 ## MDAnalysis package <img src="https://github.com/maxall41/RustSASA/blob/radical/imgs/mdanalysis-logo.png" width="25" height="25">
 
-```
+```shell
 pip install mdsasa-bolt
 ```
 
 ## Command-line interface 🤖
 
+### Install using `cargo bininstall`
+
 **1. Install Cargo Bin Install**
 
-```
+```shell
 curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 ```
 
 **2. Install rust-sasa**
 
-```
+```shell
 cargo binstall rust-sasa
+```
+
+### Install using `conda` or `mamba`
+
+```shell
+# conda
+conda install -c conda-forge rust-sasa
+
+# mamba
+mamba install -c conda-forge rust-sasa
 ```
 
 # Quick start
@@ -94,13 +113,13 @@ See full docs [here](https://github.com/maxall41/rust-sasa-python/blob/main/DOCS
 
 **Processing single file**
 
-```
+```shell
 rust-sasa path_to_pdb_file.pdb output.json # Also supports .xml, .pdb, and .cif!
 ```
 
 **Processing an entire directory**
 
-```
+```shell
 rust-sasa input_directory/ output_directory/ --format json # Also supports .xml, .pdb, and .cif!
 ```
 
@@ -162,11 +181,11 @@ MIT
 First, make sure you have the Rust compiler installed. See https://rust-lang.org/tools/install/ for installation instructions.
 
 To build RustSASA from source start by initializing git submodules with the following command:
-```
+```shell
 git submodule update --init
 ```
 Then build the binary with:
-```
+```shell
 cargo build --release
 ```
 
