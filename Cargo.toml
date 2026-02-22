@@ -21,10 +21,10 @@ rayon = "1.11.0"
 snafu = "0.8.9"
 pulp = "0.22.2"
 fnv = "1.0.3"
-clap = { version = "4.5.57", features = ["derive"], optional = true }
+clap = { version = "4.5.58", features = ["derive"], optional = true }
 serde = { version = "1.0.228", optional = true }
 serde_json = { version = "1.0.149", optional = true }
-quick-xml = { version = "0.39.0", features = ["serialize"], optional = true }
+quick-xml = { version = "0.39.1", features = ["serialize"], optional = true }
 indicatif = { version = "0.18.4", optional = true }
 mimalloc = { version = "0.1.48", default-features = false, optional = true }
 
@@ -44,7 +44,7 @@ assert_cmd = "2.1.2"
 escargot = "0.5.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-quick-xml = { version = "0.39.0", features = ["serialize"] }
+quick-xml = { version = "0.39.1", features = ["serialize"] }
 rust-sasa = { path = ".", features = ["cli"] } # Needed for integration tests
 
 [[bench]]
