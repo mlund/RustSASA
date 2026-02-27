@@ -112,11 +112,7 @@ impl Periodic {
         let l = self.dimensions[dim];
         let wrapped = coord - l * (coord * self.inv_dimensions[dim]).floor();
         // Handle edge case where wrapped == l due to floating point
-        if wrapped >= l {
-            0.0
-        } else {
-            wrapped
-        }
+        if wrapped >= l { 0.0 } else { wrapped }
     }
 
     /// Wrap a position vector into the primary box.

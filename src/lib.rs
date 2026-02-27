@@ -19,7 +19,7 @@ pub mod utils;
 pub use crate::options::*;
 pub use crate::structures::atomic::*;
 // Re-export Periodic for users who want to use PBC
-pub use crate::structures::periodic::{Periodic, DistanceMetric};
+pub use crate::structures::periodic::{DistanceMetric, Periodic};
 use crate::utils::ARCH;
 use structures::spatial_grid::SpatialGrid;
 // Re-export io functions for use in the binary crate
@@ -93,7 +93,8 @@ fn precompute_neighbors_with_metric<D: DistanceMetric + 'static>(
     // Worst case is when atom.radius == max_radii
     let max_search_radius = max_radii + max_radii + 2.0 * probe_radius;
 
-    let grid = SpatialGrid::with_metric(atoms, active_indices, cell_size, max_search_radius, metric);
+    let grid =
+        SpatialGrid::with_metric(atoms, active_indices, cell_size, max_search_radius, metric);
     grid.build_all_neighbor_lists(atoms, active_indices, probe_radius, max_radii)
 }
 

@@ -3,7 +3,7 @@
 
 use approx::assert_relative_eq;
 use rust_sasa::structures::periodic::{DistanceMetric, Euclidean, Periodic};
-use rust_sasa::{calculate_sasa_internal, calculate_sasa_with_pbc, Atom};
+use rust_sasa::{Atom, calculate_sasa_internal, calculate_sasa_with_pbc};
 use std::f32::consts::PI;
 
 const PROBE_RADIUS: f32 = 1.4;
@@ -139,7 +139,8 @@ fn test_two_spheres_no_overlap_without_pbc_but_overlap_with() {
     ];
 
     // Without PBC: atoms are 9 apart, effective radius sum = 6.8, no overlap
-    let sasa_no_pbc = calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, None);
+    let sasa_no_pbc =
+        calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, None);
 
     // With PBC: atoms are 1 apart through boundary, significant overlap
     let sasa_pbc =
@@ -149,11 +150,7 @@ fn test_two_spheres_no_overlap_without_pbc_but_overlap_with() {
     let full_area = 4.0 * PI * r * r;
 
     // Without PBC: full SASA (no overlap)
-    assert_relative_eq!(
-        sasa_no_pbc[0],
-        full_area,
-        max_relative = RELATIVE_TOLERANCE
-    );
+    assert_relative_eq!(sasa_no_pbc[0], full_area, max_relative = RELATIVE_TOLERANCE);
 
     // With PBC: reduced SASA (overlap through boundary)
     assert!(
@@ -179,8 +176,13 @@ fn test_pbc_overlap_matches_direct_overlap() {
         create_atom(1.0, 0.0, 0.0, radius, 2),
     ];
 
-    let sasa_pbc =
-        calculate_sasa_with_pbc(&atoms_pbc, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
+    let sasa_pbc = calculate_sasa_with_pbc(
+        &atoms_pbc,
+        PROBE_RADIUS,
+        HIGH_PRECISION_N_POINTS,
+        1,
+        Some(pbox),
+    );
     let sasa_direct =
         calculate_sasa_internal(&atoms_direct, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1);
 
@@ -208,16 +210,14 @@ fn test_rectangular_box_z_wrap() {
         create_atom(10.0, 10.0, 4.5, radius, 2), // 4 apart direct, 1 through boundary
     ];
 
-    let sasa = calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
+    let sasa =
+        calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
 
     let r = radius + PROBE_RADIUS;
     let full_area = 4.0 * PI * r * r;
 
     // Should overlap since they're only 1 Angstrom apart through boundary
-    assert!(
-        sasa[0] < full_area * 0.9,
-        "Expected overlap in Z dimension"
-    );
+    assert!(sasa[0] < full_area * 0.9, "Expected overlap in Z dimension");
 }
 
 #[test]
@@ -228,7 +228,8 @@ fn test_self_interaction_prevention() {
 
     let atoms = vec![create_atom(2.5, 2.5, 2.5, radius, 1)];
 
-    let sasa = calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
+    let sasa =
+        calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
 
     // Single atom should have full SASA (no self-occlusion)
     let r = radius + PROBE_RADIUS;
@@ -249,7 +250,8 @@ fn test_corner_atom_multiple_images() {
         create_atom(9.5, 9.5, 9.5, radius, 2),
     ];
 
-    let sasa = calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
+    let sasa =
+        calculate_sasa_with_pbc(&atoms, PROBE_RADIUS, HIGH_PRECISION_N_POINTS, 1, Some(pbox));
 
     let r = radius + PROBE_RADIUS;
     let full_area = 4.0 * PI * r * r;

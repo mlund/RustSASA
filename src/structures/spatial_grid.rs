@@ -44,7 +44,13 @@ impl SpatialGrid<Euclidean> {
         cell_size: f32,
         max_search_radius: f32,
     ) -> Self {
-        Self::with_metric(atoms, active_indices, cell_size, max_search_radius, Euclidean)
+        Self::with_metric(
+            atoms,
+            active_indices,
+            cell_size,
+            max_search_radius,
+            Euclidean,
+        )
     }
 }
 
@@ -60,7 +66,13 @@ impl SpatialGrid<Periodic> {
         max_search_radius: f32,
         periodic: Periodic,
     ) -> Self {
-        Self::with_metric_pbc(atoms, active_indices, cell_size, max_search_radius, periodic)
+        Self::with_metric_pbc(
+            atoms,
+            active_indices,
+            cell_size,
+            max_search_radius,
+            periodic,
+        )
     }
 
     /// Create a periodic grid with correct search extent for PBC.
@@ -104,12 +116,8 @@ impl SpatialGrid<Periodic> {
         let mut cell_counts = vec![0u32; num_cells];
         for &idx in active_indices {
             let wrapped_pos = metric.wrap_position(&atoms[idx].position);
-            let cell = Self::get_cell_index_static(
-                &wrapped_pos,
-                &min_bounds,
-                inv_cell_size,
-                &grid_dims,
-            );
+            let cell =
+                Self::get_cell_index_static(&wrapped_pos, &min_bounds, inv_cell_size, &grid_dims);
             cell_counts[cell] += 1;
         }
 
@@ -132,7 +140,8 @@ impl SpatialGrid<Periodic> {
         for &orig_idx in active_indices {
             let atom = &atoms[orig_idx];
             let wrapped_pos = metric.wrap_position(&atom.position);
-            let cell = Self::get_cell_index_static(&wrapped_pos, &min_bounds, inv_cell_size, &grid_dims);
+            let cell =
+                Self::get_cell_index_static(&wrapped_pos, &min_bounds, inv_cell_size, &grid_dims);
 
             let wp = write_pos[cell] as usize;
             atom_indices[wp] = orig_idx as u32;
@@ -293,7 +302,9 @@ impl<D: DistanceMetric> SpatialGrid<D> {
             let cx = cx.rem_euclid(self.grid_dims[0] as i32) as u32;
             let cy = cy.rem_euclid(self.grid_dims[1] as i32) as u32;
             let cz = cz.rem_euclid(self.grid_dims[2] as i32) as u32;
-            Some((cx + cy * self.grid_dims[0] + cz * self.grid_dims[0] * self.grid_dims[1]) as usize)
+            Some(
+                (cx + cy * self.grid_dims[0] + cz * self.grid_dims[0] * self.grid_dims[1]) as usize,
+            )
         } else {
             // Non-periodic: reject out-of-bounds cells
             if cx < 0 || cy < 0 || cz < 0 {
@@ -305,7 +316,9 @@ impl<D: DistanceMetric> SpatialGrid<D> {
             if cx >= self.grid_dims[0] || cy >= self.grid_dims[1] || cz >= self.grid_dims[2] {
                 return None;
             }
-            Some((cx + cy * self.grid_dims[0] + cz * self.grid_dims[0] * self.grid_dims[1]) as usize)
+            Some(
+                (cx + cy * self.grid_dims[0] + cz * self.grid_dims[0] * self.grid_dims[1]) as usize,
+            )
         }
     }
 
@@ -659,15 +672,22 @@ mod tests {
         let max_search_radius = max_radius + max_radius + 2.0 * probe_radius;
 
         let grid = SpatialGrid::new(&atoms, &active_indices, cell_size, max_search_radius);
-        let neighbors = grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
+        let neighbors =
+            grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
 
         // Atom 0 should have atom 1 as neighbor
         assert!(!neighbors[0].is_empty(), "Atom 0 should have neighbors");
-        assert_eq!(neighbors[0][0].idx, 1, "Atom 0 should have atom 1 as neighbor");
+        assert_eq!(
+            neighbors[0][0].idx, 1,
+            "Atom 0 should have atom 1 as neighbor"
+        );
 
         // Atom 1 should have atom 0 as neighbor
         assert!(!neighbors[1].is_empty(), "Atom 1 should have neighbors");
-        assert_eq!(neighbors[1][0].idx, 0, "Atom 1 should have atom 0 as neighbor");
+        assert_eq!(
+            neighbors[1][0].idx, 0,
+            "Atom 1 should have atom 0 as neighbor"
+        );
     }
 
     #[test]
@@ -684,8 +704,10 @@ mod tests {
         let max_search_radius = max_radius + max_radius + 2.0 * probe_radius;
         let pbox = Periodic::new([10.0, 10.0, 10.0]);
 
-        let grid = SpatialGrid::new_periodic(&atoms, &active_indices, cell_size, max_search_radius, pbox);
-        let neighbors = grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
+        let grid =
+            SpatialGrid::new_periodic(&atoms, &active_indices, cell_size, max_search_radius, pbox);
+        let neighbors =
+            grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
 
         // Both atoms should find each other
         assert!(!neighbors[0].is_empty(), "Atom 0 should have neighbors");
@@ -709,25 +731,38 @@ mod tests {
 
         // Verify the metric computes correct distance
         let dist_sq = pbox.distance_squared(&atoms[0].position, &atoms[1].position);
-        assert!((dist_sq - 4.0).abs() < 0.001, "PBC distance squared should be 4, got {}", dist_sq);
+        assert!(
+            (dist_sq - 4.0).abs() < 0.001,
+            "PBC distance squared should be 4, got {}",
+            dist_sq
+        );
 
-        let grid = SpatialGrid::new_periodic(&atoms, &active_indices, cell_size, max_search_radius, pbox);
+        let grid =
+            SpatialGrid::new_periodic(&atoms, &active_indices, cell_size, max_search_radius, pbox);
 
         // Check grid properties
         assert!(grid.use_periodic_cells, "Grid should use periodic cells");
 
-        let neighbors = grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
+        let neighbors =
+            grid.build_all_neighbor_lists(&atoms, &active_indices, probe_radius, max_radius);
 
         // Verify search radius covers the PBC distance
         let sr = max_radius + max_radius + 2.0 * probe_radius;
-        assert!(dist_sq <= sr * sr, "Distance {} should be within search radius {}", dist_sq.sqrt(), sr);
+        assert!(
+            dist_sq <= sr * sr,
+            "Distance {} should be within search radius {}",
+            dist_sq.sqrt(),
+            sr
+        );
 
         // Both atoms should find each other through periodic boundary
-        assert!(!neighbors[0].is_empty(),
+        assert!(
+            !neighbors[0].is_empty(),
             "Atom 0 should have neighbors (PBC distance is {}, search radius is {})",
-            dist_sq.sqrt(), sr);
-        assert!(!neighbors[1].is_empty(),
-            "Atom 1 should have neighbors");
+            dist_sq.sqrt(),
+            sr
+        );
+        assert!(!neighbors[1].is_empty(), "Atom 1 should have neighbors");
     }
 
     #[test]
@@ -740,7 +775,10 @@ mod tests {
         // Euclidean distance squared
         let euclidean = Euclidean;
         let dist_euclidean = euclidean.distance_squared(&a, &b);
-        assert!((dist_euclidean - 64.0).abs() < 0.001, "Euclidean should be 64");
+        assert!(
+            (dist_euclidean - 64.0).abs() < 0.001,
+            "Euclidean should be 64"
+        );
 
         // Periodic distance squared
         let dist_periodic = pbox.distance_squared(&a, &b);
