@@ -1,8 +1,9 @@
 // Copyright (c) 2024 Maxwell Campbell. Licensed under the MIT License.
 use crate::structures::atomic::{ChainResult, ProteinResult, ResidueResult};
+use crate::structures::periodic::Periodic;
 use crate::utils::consts::{POLAR_AMINO_ACIDS, load_radii_from_file};
 use crate::utils::{combine_hash, get_radius, serialize_chain_id, simd_sum};
-use crate::{Atom, calculate_sasa_internal};
+use crate::{Atom, calculate_sasa_with_pbc};
 use fnv::FnvHashMap;
 use pdbtbx::PDB;
 use snafu::OptionExt;
@@ -66,6 +67,7 @@ pub struct SASAOptions<T> {
     allow_vdw_fallback: bool,
     include_hetatms: bool,
     read_radii_from_occupancy: bool,
+    periodic_box: Option<Periodic>,
     _marker: PhantomData<T>,
 }
 
@@ -505,6 +507,7 @@ impl<T> SASAOptions<T> {
             allow_vdw_fallback: false,
             include_hetatms: false,
             read_radii_from_occupancy: false,
+            periodic_box: None,
             _marker: PhantomData,
         }
     }
@@ -557,6 +560,27 @@ impl<T> SASAOptions<T> {
     /// Allow fallback to PDBTBX van der Waals radii when radius is not found in radii config file (default: false)
     pub fn with_allow_vdw_fallback(mut self, allow: bool) -> Self {
         self.allow_vdw_fallback = allow;
+        self
+    }
+
+    /// Set periodic boundary conditions for the calculation.
+    ///
+    /// When set, distances are computed using the minimum image convention,
+    /// which finds the closest periodic image of each atom pair.
+    ///
+    /// # Arguments
+    /// * `box_dims` - The periodic box dimensions [Lx, Ly, Lz] in Angstroms.
+    ///   Pass `None` to disable periodic boundaries (default).
+    ///
+    /// # Example
+    /// ```rust
+    /// use rust_sasa::options::{SASAOptions, AtomLevel};
+    ///
+    /// let options = SASAOptions::<AtomLevel>::new()
+    ///     .with_periodic_box(Some([50.0, 50.0, 50.0]));
+    /// ```
+    pub fn with_periodic_box(mut self, box_dims: Option<[f32; 3]>) -> Self {
+        self.periodic_box = box_dims.map(Periodic::new);
         self
     }
 }
@@ -612,8 +636,13 @@ impl<T: SASAProcessor> SASAOptions<T> {
             self.include_hetatms,
             self.read_radii_from_occupancy,
         )?;
-        let atom_sasa =
-            calculate_sasa_internal(&atoms, self.probe_radius, self.n_points, self.threads);
+        let atom_sasa = calculate_sasa_with_pbc(
+            &atoms,
+            self.probe_radius,
+            self.n_points,
+            self.threads,
+            self.periodic_box,
+        );
         T::process_atoms(&atoms, &atom_sasa, pdb, &parent_to_atoms)
     }
 }

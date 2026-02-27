@@ -11,12 +11,15 @@
 pub mod options;
 // Re-export the new level types and processor trait
 pub use options::{AtomLevel, ChainLevel, ProteinLevel, ResidueLevel, SASAProcessor};
+use structures::periodic::Euclidean;
 use utils::consts::ANGLE_INCREMENT;
 pub mod structures;
 pub mod utils;
 
 pub use crate::options::*;
 pub use crate::structures::atomic::*;
+// Re-export Periodic for users who want to use PBC
+pub use crate::structures::periodic::{Periodic, DistanceMetric};
 use crate::utils::ARCH;
 use structures::spatial_grid::SpatialGrid;
 // Re-export io functions for use in the binary crate
@@ -72,6 +75,17 @@ pub fn precompute_neighbors(
     probe_radius: f32,
     max_radii: f32,
 ) -> Vec<Vec<NeighborData>> {
+    precompute_neighbors_with_metric(atoms, active_indices, probe_radius, max_radii, Euclidean)
+}
+
+#[inline(never)]
+fn precompute_neighbors_with_metric<D: DistanceMetric + 'static>(
+    atoms: &[Atom],
+    active_indices: &[usize],
+    probe_radius: f32,
+    max_radii: f32,
+    metric: D,
+) -> Vec<Vec<NeighborData>> {
     // Same cell_size as original
     let cell_size = probe_radius + max_radii;
 
@@ -79,10 +93,32 @@ pub fn precompute_neighbors(
     // Worst case is when atom.radius == max_radii
     let max_search_radius = max_radii + max_radii + 2.0 * probe_radius;
 
-    let grid = SpatialGrid::new(atoms, active_indices, cell_size, max_search_radius);
+    let grid = SpatialGrid::with_metric(atoms, active_indices, cell_size, max_search_radius, metric);
     grid.build_all_neighbor_lists(atoms, active_indices, probe_radius, max_radii)
 }
 
+#[inline(never)]
+fn precompute_neighbors_periodic(
+    atoms: &[Atom],
+    active_indices: &[usize],
+    probe_radius: f32,
+    max_radii: f32,
+    pbc: Periodic,
+) -> Vec<Vec<NeighborData>> {
+    // Same cell_size as original
+    let cell_size = probe_radius + max_radii;
+
+    // Maximum search radius from original: atom.radius + max_radii + 2.0 * probe_radius
+    // Worst case is when atom.radius == max_radii
+    let max_search_radius = max_radii + max_radii + 2.0 * probe_radius;
+
+    // Use the PBC-specific grid that handles periodic wrapping correctly
+    let grid = SpatialGrid::new_periodic(atoms, active_indices, cell_size, max_search_radius, pbc);
+    grid.build_all_neighbor_lists(atoms, active_indices, probe_radius, max_radii)
+}
+
+/// SASA kernel for Euclidean (non-periodic) distance calculations.
+/// This is the original optimized kernel.
 struct AtomSasaKernel<'a> {
     atom_index: usize,
     atoms: &'a [Atom],
@@ -171,9 +207,6 @@ impl<'a> pulp::WithSimd for AtomSasaKernel<'a> {
             if current_nb < self.neighbors.len() {
                 let neighbor = &self.neighbors[current_nb];
                 if self.atoms[neighbor.idx as usize].id != atom.id {
-                    if self.atoms[neighbor.idx as usize].id == atom.id {
-                        continue;
-                    }
                     let n_pos = self.atoms[neighbor.idx as usize].position;
                     let vx = center_pos[0] - n_pos[0];
                     let vy = center_pos[1] - n_pos[1];
@@ -223,7 +256,154 @@ impl<'a> pulp::WithSimd for AtomSasaKernel<'a> {
     }
 }
 
+/// SASA kernel for periodic boundary conditions.
+/// Uses the distance metric for minimum image convention.
+struct AtomSasaKernelPbc<'a, D: DistanceMetric> {
+    atom_index: usize,
+    atoms: &'a [Atom],
+    neighbors: &'a [NeighborData],
+    sphere_points: &'a SpherePointsSoA,
+    probe_radius: f32,
+    metric: D,
+}
+
+impl<'a, D: DistanceMetric> pulp::WithSimd for AtomSasaKernelPbc<'a, D> {
+    type Output = f32;
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) -> Self::Output {
+        let atom = &self.atoms[self.atom_index];
+        let center_pos = atom.position;
+        let r = atom.radius + self.probe_radius;
+        let r2 = r * r;
+
+        let (sx_chunks, sx_rem) = S::as_simd_f32s(&self.sphere_points.x);
+        let (sy_chunks, sy_rem) = S::as_simd_f32s(&self.sphere_points.y);
+        let (sz_chunks, sz_rem) = S::as_simd_f32s(&self.sphere_points.z);
+
+        let mut accessible_points = 0.0;
+
+        // Precompute true mask for NOT operation
+        let zero = simd.splat_f32s(0.0);
+        let true_mask = simd.equal_f32s(zero, zero);
+
+        // Process chunks
+        for i in 0..sx_chunks.len() {
+            let sx = sx_chunks[i];
+            let sy = sy_chunks[i];
+            let sz = sz_chunks[i];
+
+            // Initialize with all false (0.0).
+            let mut chunk_mask = simd.less_than_f32s(simd.splat_f32s(1.0), simd.splat_f32s(0.0));
+
+            for neighbor in self.neighbors {
+                if self.atoms[neighbor.idx as usize].id == atom.id {
+                    continue;
+                }
+
+                let neighbor_pos = self.atoms[neighbor.idx as usize].position;
+                // Use metric for displacement calculation (minimum image convention)
+                let disp = self.metric.displacement(&center_pos, &neighbor_pos);
+                let vx_scalar = disp[0];
+                let vy_scalar = disp[1];
+                let vz_scalar = disp[2];
+                let v_mag_sq =
+                    vx_scalar * vx_scalar + vy_scalar * vy_scalar + vz_scalar * vz_scalar;
+
+                let t = neighbor.threshold_squared;
+                let limit_scalar = (t - v_mag_sq - r2) / (2.0 * r);
+
+                let vx = simd.splat_f32s(vx_scalar);
+                let vy = simd.splat_f32s(vy_scalar);
+                let vz = simd.splat_f32s(vz_scalar);
+                let limit = simd.splat_f32s(limit_scalar);
+
+                let dot =
+                    simd.mul_add_f32s(sx, vx, simd.mul_add_f32s(sy, vy, simd.mul_f32s(sz, vz)));
+
+                let occ = simd.less_than_f32s(dot, limit);
+                chunk_mask = simd.or_m32s(chunk_mask, occ);
+
+                let not_occ = simd.xor_m32s(chunk_mask, true_mask);
+                if simd.first_true_m32s(not_occ) == S::F32_LANES {
+                    break;
+                }
+            }
+
+            // accessible points are !chunk_mask
+            let not_occ = simd.xor_m32s(chunk_mask, true_mask);
+            let contribution =
+                simd.select_f32s(not_occ, simd.splat_f32s(1.0), simd.splat_f32s(0.0));
+            accessible_points += simd.reduce_sum_f32s(contribution);
+        }
+
+        // Process remainder
+        let mut current_nb = 0;
+        for i in 0..sx_rem.len() {
+            let sx = sx_rem[i];
+            let sy = sy_rem[i];
+            let sz = sz_rem[i];
+            let mut occluded = false;
+
+            // First check the neighbor that occluded the previous point
+            if current_nb < self.neighbors.len() {
+                let neighbor = &self.neighbors[current_nb];
+                if self.atoms[neighbor.idx as usize].id != atom.id {
+                    let n_pos = self.atoms[neighbor.idx as usize].position;
+                    // Use metric for displacement
+                    let disp = self.metric.displacement(&center_pos, &n_pos);
+                    let vx = disp[0];
+                    let vy = disp[1];
+                    let vz = disp[2];
+                    let v_mag_sq = vx * vx + vy * vy + vz * vz;
+
+                    let t = neighbor.threshold_squared;
+                    let limit = (t - v_mag_sq - r2) / (2.0 * r);
+                    let dot = sx * vx + sy * vy + sz * vz;
+                    if dot <= limit {
+                        occluded = true;
+                    }
+                }
+            }
+
+            // Only search all neighbors if the cached one didn't occlude
+            if !occluded {
+                for (idx, neighbor) in self.neighbors.iter().enumerate() {
+                    if self.atoms[neighbor.idx as usize].id == atom.id {
+                        continue;
+                    }
+                    let n_pos = self.atoms[neighbor.idx as usize].position;
+                    // Use metric for displacement
+                    let disp = self.metric.displacement(&center_pos, &n_pos);
+                    let vx = disp[0];
+                    let vy = disp[1];
+                    let vz = disp[2];
+                    let v_mag_sq = vx * vx + vy * vy + vz * vz;
+
+                    let t = neighbor.threshold_squared;
+                    let limit = (t - v_mag_sq - r2) / (2.0 * r);
+                    let dot = sx * vx + sy * vy + sz * vz;
+                    if dot <= limit {
+                        occluded = true;
+                        current_nb = idx; // Cache for next point
+                        break;
+                    }
+                }
+            }
+
+            if !occluded {
+                accessible_points += 1.0;
+            }
+        }
+
+        let surface_area = 4.0 * std::f32::consts::PI * r2;
+        let inv_n_points = 1.0 / (self.sphere_points.len() as f32);
+        surface_area * accessible_points * inv_n_points
+    }
+}
+
 /// Takes the probe radius and number of points to use along with a list of Atoms as inputs and returns a Vec with SASA values for each atom.
+///
 /// For most users it is recommend that you use the SASAOptions interface instead. This method can be used directly if you do not want to use pdbtbx to load PDB/mmCIF files or want to load them from a different source.
 /// Probe Radius Default: 1.4
 /// Point Count Default: 100
@@ -290,6 +470,90 @@ pub fn calculate_sasa_internal(
     };
 
     // Map results back to original indices (hydrogens get 0.0)
+    let mut results = vec![0.0; atoms.len()];
+    for (list_idx, &orig_idx) in active_indices.iter().enumerate() {
+        results[orig_idx] = active_results[list_idx];
+    }
+    results
+}
+
+/// Calculate SASA with optional periodic boundary conditions.
+///
+/// This function supports both Euclidean (non-periodic) and periodic boundary
+/// condition calculations. When `periodic_box` is `None`, this produces
+/// bit-identical results to `calculate_sasa_internal`.
+///
+/// # Arguments
+/// * `atoms` - Slice of atoms with positions and radii
+/// * `probe_radius` - Radius of the solvent probe (typically 1.4 Angstroms)
+/// * `n_points` - Number of points on the sphere for sampling
+/// * `threads` - Number of threads (-1 for all cores, 1 for single-threaded)
+/// * `periodic_box` - Optional periodic box for PBC calculations
+///
+/// # Returns
+/// A vector of SASA values for each atom.
+pub fn calculate_sasa_with_pbc(
+    atoms: &[Atom],
+    probe_radius: f32,
+    n_points: usize,
+    threads: isize,
+    periodic_box: Option<Periodic>,
+) -> Vec<f32> {
+    match periodic_box {
+        None => calculate_sasa_internal(atoms, probe_radius, n_points, threads),
+        Some(pbc) => calculate_sasa_periodic(atoms, probe_radius, n_points, threads, pbc),
+    }
+}
+
+/// Internal function to calculate SASA with periodic boundary conditions.
+fn calculate_sasa_periodic(
+    atoms: &[Atom],
+    probe_radius: f32,
+    n_points: usize,
+    threads: isize,
+    pbc: Periodic,
+) -> Vec<f32> {
+    let active_indices: Vec<usize> = (0..atoms.len()).collect();
+
+    let sphere_points = generate_sphere_points(n_points);
+
+    let max_radii = active_indices
+        .iter()
+        .map(|&i| atoms[i].radius)
+        .fold(0.0f32, f32::max);
+
+    // Use the PBC-specific neighbor computation
+    let neighbor_lists =
+        precompute_neighbors_periodic(atoms, &active_indices, probe_radius, max_radii, pbc);
+
+    let process_atom = |(list_idx, neighbors): (usize, &Vec<NeighborData>)| {
+        let orig_idx = active_indices[list_idx];
+        ARCH.dispatch(AtomSasaKernelPbc {
+            atom_index: orig_idx,
+            atoms,
+            neighbors,
+            sphere_points: &sphere_points,
+            probe_radius,
+            metric: pbc,
+        })
+    };
+
+    // Use sequential iteration when threads == 1 to avoid thread pool overhead
+    let active_results: Vec<f32> = if threads == 1 {
+        neighbor_lists
+            .iter()
+            .enumerate()
+            .map(process_atom)
+            .collect()
+    } else {
+        neighbor_lists
+            .par_iter()
+            .enumerate()
+            .map(process_atom)
+            .collect()
+    };
+
+    // Map results back to original indices
     let mut results = vec![0.0; atoms.len()];
     for (list_idx, &orig_idx) in active_indices.iter().enumerate() {
         results[orig_idx] = active_results[list_idx];
